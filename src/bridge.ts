@@ -138,8 +138,7 @@ DiscordClient.on('messageCreate', async (message: Message) => {
         if (message.content) {
             formattedMessage = `<b>${message.author.username}</b>: ${message.content}`;
         } else {
-            formattedMessage = `<b>${message.author.username}</b> sent a message`;
-            console.log('Note: No access to message content. Enable MESSAGE CONTENT INTENT in Discord Developer Portal for full functionality.');
+            formattedMessage = `<b>${message.author.username}</b>:`;
         }
 
         // Forward the message to all mapped Telegram chats
