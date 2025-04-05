@@ -36,7 +36,7 @@ export const execute = async (interaction: CommandInteraction) => {
             return;
         }
 
-        const added = addChannelMapping(channelId, telegramChatId);
+        const added = await addChannelMapping(channelId, telegramChatId);
 
         if (added) {
             await interaction.reply(`Successfully connected this Discord channel to Telegram chat ID ${telegramChatId}. Messages from here will be forwarded to Telegram.`);
@@ -52,7 +52,7 @@ export const execute = async (interaction: CommandInteraction) => {
             return;
         }
 
-        const removed = removeChannelMapping(channelId, telegramChatId);
+        const removed = await removeChannelMapping(channelId, telegramChatId);
 
         if (removed) {
             await interaction.reply(`Successfully disconnected this Discord channel from Telegram chat ID ${telegramChatId}. Messages will no longer be forwarded.`);

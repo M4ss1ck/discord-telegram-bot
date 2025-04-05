@@ -15,8 +15,8 @@ export const execute = async (interaction: CommandInteraction) => {
         `• Total Members: ${interaction.guild?.memberCount}\n` +
         `• Current Channel ID: ${channelId}\n\n`;
 
-    // Bridge status information
-    const telegramChatIds = getMappingsForDiscordChannel(channelId);
+    // Bridge status information - now using async function
+    const telegramChatIds = await getMappingsForDiscordChannel(channelId);
 
     if (telegramChatIds.length === 0) {
         responseMessage += `Bridge Status: This channel is not forwarding messages to any Telegram chats.`;

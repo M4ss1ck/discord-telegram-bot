@@ -3,63 +3,120 @@ import { Context } from 'telegraf';
 import { Message as TelegramMessage } from 'telegraf/typings/core/types/typegram';
 import DiscordClient from './discord/client';
 import TelegramBot from './telegram/bot';
+import { createClient } from 'redis';
 
-// Simple in-memory storage for channel mappings
-// In a production app, this should be stored in a database
+// Interface for channel mappings
 interface ChannelMapping {
     discordChannelId: string;
     telegramChatId: number;
 }
 
-// Array to store mappings between Discord channels and Telegram chats
-const channelMappings: ChannelMapping[] = [];
+// Create Redis client
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+const redisClient = createClient({
+    url: redisUrl
+});
+
+// Redis connection handling
+redisClient.on('error', (err) => console.error('Redis Client Error:', err));
+redisClient.on('connect', () => console.log('Connected to Redis'));
+redisClient.on('ready', () => console.log('Redis Client Ready'));
+redisClient.on('reconnecting', () => console.log('Redis Client Reconnecting'));
+
+// Connect to Redis
+(async () => {
+    await redisClient.connect();
+})().catch(err => {
+    console.error('Failed to connect to Redis:', err);
+});
+
+// Redis keys
+const MAPPINGS_KEY = 'discord_telegram_mappings';
 
 // Function to add a new mapping
-export function addChannelMapping(discordChannelId: string, telegramChatId: number) {
-    // Check if mapping already exists
-    const existingMapping = channelMappings.find(
-        mapping => mapping.discordChannelId === discordChannelId && mapping.telegramChatId === telegramChatId
-    );
+export async function addChannelMapping(discordChannelId: string, telegramChatId: number): Promise<boolean> {
+    try {
+        // Check if mapping already exists
+        const mappings = await getAllMappings();
+        const existingMapping = mappings.find(
+            mapping => mapping.discordChannelId === discordChannelId && mapping.telegramChatId === telegramChatId
+        );
 
-    if (!existingMapping) {
-        channelMappings.push({ discordChannelId, telegramChatId });
-        return true;
+        if (!existingMapping) {
+            // Add new mapping
+            mappings.push({ discordChannelId, telegramChatId });
+            // Save to Redis
+            await redisClient.set(MAPPINGS_KEY, JSON.stringify(mappings));
+            return true;
+        }
+
+        return false;
+    } catch (error) {
+        console.error('Error adding channel mapping:', error);
+        return false;
     }
-
-    return false;
 }
 
 // Function to remove a mapping
-export function removeChannelMapping(discordChannelId: string, telegramChatId: number) {
-    const initialLength = channelMappings.length;
-    const newMappings = channelMappings.filter(
-        mapping => !(mapping.discordChannelId === discordChannelId && mapping.telegramChatId === telegramChatId)
-    );
+export async function removeChannelMapping(discordChannelId: string, telegramChatId: number): Promise<boolean> {
+    try {
+        const mappings = await getAllMappings();
+        const initialLength = mappings.length;
 
-    // Update the array
-    channelMappings.length = 0;
-    channelMappings.push(...newMappings);
+        // Filter out the mapping to remove
+        const newMappings = mappings.filter(
+            mapping => !(mapping.discordChannelId === discordChannelId && mapping.telegramChatId === telegramChatId)
+        );
 
-    return channelMappings.length !== initialLength;
+        // If mapping was found and removed
+        if (initialLength !== newMappings.length) {
+            await redisClient.set(MAPPINGS_KEY, JSON.stringify(newMappings));
+            return true;
+        }
+
+        return false;
+    } catch (error) {
+        console.error('Error removing channel mapping:', error);
+        return false;
+    }
 }
 
 // Function to get all mappings for a Discord channel
-export function getMappingsForDiscordChannel(discordChannelId: string): number[] {
-    return channelMappings
-        .filter(mapping => mapping.discordChannelId === discordChannelId)
-        .map(mapping => mapping.telegramChatId);
+export async function getMappingsForDiscordChannel(discordChannelId: string): Promise<number[]> {
+    try {
+        const mappings = await getAllMappings();
+        return mappings
+            .filter(mapping => mapping.discordChannelId === discordChannelId)
+            .map(mapping => mapping.telegramChatId);
+    } catch (error) {
+        console.error('Error getting mappings for Discord channel:', error);
+        return [];
+    }
 }
 
 // Function to get all mappings for a Telegram chat
-export function getMappingsForTelegramChat(telegramChatId: number): string[] {
-    return channelMappings
-        .filter(mapping => mapping.telegramChatId === telegramChatId)
-        .map(mapping => mapping.discordChannelId);
+export async function getMappingsForTelegramChat(telegramChatId: number): Promise<string[]> {
+    try {
+        const mappings = await getAllMappings();
+        return mappings
+            .filter(mapping => mapping.telegramChatId === telegramChatId)
+            .map(mapping => mapping.discordChannelId);
+    } catch (error) {
+        console.error('Error getting mappings for Telegram chat:', error);
+        return [];
+    }
 }
 
-// Function to list all mappings
-export function getAllMappings(): ChannelMapping[] {
-    return [...channelMappings];
+// Function to get all mappings
+export async function getAllMappings(): Promise<ChannelMapping[]> {
+    try {
+        const data = await redisClient.get(MAPPINGS_KEY);
+        if (!data) return [];
+        return JSON.parse(data);
+    } catch (error) {
+        console.error('Error getting all mappings:', error);
+        return [];
+    }
 }
 
 // Handle Discord messages and forward them to Telegram
@@ -71,7 +128,7 @@ DiscordClient.on('messageCreate', async (message: Message) => {
     const channelId = message.channelId;
 
     // Find all Telegram chats this Discord channel is mapped to
-    const telegramChatIds = getMappingsForDiscordChannel(channelId);
+    const telegramChatIds = await getMappingsForDiscordChannel(channelId);
 
     if (telegramChatIds.length > 0) {
         // Format the message for Telegram using HTML parse mode
@@ -81,7 +138,7 @@ DiscordClient.on('messageCreate', async (message: Message) => {
         if (message.content) {
             formattedMessage = `<b>${message.author.username}</b>: ${message.content}`;
         } else {
-            formattedMessage = `<b>${message.author.username}</b>:`;
+            formattedMessage = `<b>${message.author.username}</b> sent a message`;
             console.log('Note: No access to message content. Enable MESSAGE CONTENT INTENT in Discord Developer Portal for full functionality.');
         }
 

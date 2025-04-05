@@ -38,15 +38,26 @@ This project is a one-way bridge from Discord to Telegram, forwarding messages f
    ADMIN_ID=your_telegram_user_id  # Optional, for admin commands
    DISCORD_CLIENT_ID=your_discord_client_id
    DISCORD_GUILD_ID=your_discord_guild_id  # For deploying commands
+   REDIS_URL=redis://localhost:6379  # Redis connection URL (default is localhost)
    ```
 
 5. Configure Discord Bot Permissions:
+
    - Go to the [Discord Developer Portal](https://discord.com/developers/applications)
    - Select your application
    - Go to the "Bot" tab
    - Under "Privileged Gateway Intents", enable "MESSAGE CONTENT INTENT"
    - This is required to read message content for forwarding to Telegram
    - Save your changes
+
+6. Set up Redis Server:
+   - Redis is used to store channel mappings, ensuring they persist between bot restarts
+   - Install Redis on your server or use a Redis cloud service:
+     - For Ubuntu/Debian: `sudo apt install redis-server`
+     - For macOS with Homebrew: `brew install redis`
+     - For Windows: Download from https://github.com/microsoftarchive/redis/releases
+   - Start the Redis server before running the bot
+   - Or configure the `REDIS_URL` environment variable to connect to a remote Redis instance
 
 ## Usage
 

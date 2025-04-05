@@ -25,8 +25,8 @@ bridge.command('link', async (ctx) => {
             return ctx.reply('Invalid Discord channel ID or the channel is not a text channel.');
         }
 
-        // Add the mapping
-        const added = addChannelMapping(discordChannelId, telegramChatId);
+        // Add the mapping - now using async function
+        const added = await addChannelMapping(discordChannelId, telegramChatId);
 
         if (added) {
             await ctx.reply(`Successfully connected to Discord channel #${channel.name}. Messages from that channel will be forwarded to this chat.`);
@@ -54,8 +54,8 @@ bridge.command('unlink', async (ctx) => {
     const telegramChatId = ctx.chat.id;
 
     try {
-        // Remove the mapping
-        const removed = removeChannelMapping(discordChannelId, telegramChatId);
+        // Remove the mapping - now using async function
+        const removed = await removeChannelMapping(discordChannelId, telegramChatId);
 
         if (removed) {
             await ctx.reply(`Successfully disconnected from Discord channel ID ${discordChannelId}. Messages will no longer be forwarded to this chat.`);
@@ -83,8 +83,8 @@ bridge.command('unlink', async (ctx) => {
 bridge.command('status', async (ctx) => {
     const telegramChatId = ctx.chat.id;
 
-    // Get all Discord channels linked to this Telegram chat
-    const discordChannelIds = getMappingsForTelegramChat(telegramChatId);
+    // Get all Discord channels linked to this Telegram chat - now using async function
+    const discordChannelIds = await getMappingsForTelegramChat(telegramChatId);
 
     if (discordChannelIds.length === 0) {
         return ctx.reply('This chat is not receiving messages from any Discord channels.');
@@ -117,10 +117,11 @@ bridge.command('mappings', async (ctx) => {
         return; // Silently ignore if not admin
     }
 
-    const allMappings = getAllMappings();
+    // Get all mappings - now using async function
+    const allMappings = await getAllMappings();
 
     if (allMappings.length === 0) {
-        return ctx.reply('No active channel mappings.');
+        return ctx.reply('No active forwarding connections.');
     }
 
     let message = 'All active forwarding connections:\n\n';

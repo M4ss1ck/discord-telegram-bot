@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "discord.js": "^14.16.3",
+    "redis": "^4.7.0",
     "telegraf": "^4.16.3"
   },
   "devDependencies": {
