@@ -27,34 +27,57 @@ const client = new ExtendedClient({
 // Promise to track when commands are loaded
 const commandLoadingPromises: Promise<void>[] = [];
 
+// Check if we're in production
+const isProd = process.env.NODE_ENV === 'production';
+
 // Load commands
 const loadCommands = async () => {
-    const foldersPath = path.join(__dirname, 'commands');
+    // Get the base path based on environment
+    const basePath = isProd ? path.join(process.cwd(), 'dist') : __dirname;
+    const foldersPath = path.join(basePath, isProd ? 'discord/commands' : 'commands');
+
+    // Check if directory exists
+    if (!fs.existsSync(foldersPath)) {
+        console.error(`Commands folder not found: ${foldersPath}`);
+        return;
+    }
+
     const commandFolders = fs.readdirSync(foldersPath);
 
     for (const folder of commandFolders) {
         const commandsPath = path.join(foldersPath, folder);
-        const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.ts'));
+
+        // Skip if not a directory
+        if (!fs.statSync(commandsPath).isDirectory()) {
+            continue;
+        }
+
+        // Use appropriate file extension based on environment
+        const fileExtension = isProd ? '.js' : '.ts';
+        const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(fileExtension));
+
         for (const file of commandFiles) {
             const filePath = path.join(commandsPath, file);
             try {
-                // Convert to file:// URL for import
-                const fileUrl = `file://${filePath}`;
+                let command;
 
-                // Create a promise for each command loading
-                const commandPromise = import(fileUrl).then(command => {
-                    // Set a new item in the Collection with the key as the command name and the value as the exported module
-                    if ('data' in command && 'execute' in command) {
-                        client.commands.set(command.data.name, command);
-                        console.log(`Loaded command: ${command.data.name}`);
-                    } else {
-                        console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-                    }
-                }).catch(error => {
-                    console.error(`Error importing command at ${filePath}:`, error);
-                });
+                if (isProd) {
+                    // For .js files in production, use require
+                    command = require(filePath);
+                } else {
+                    // For .ts files in development, use dynamic import
+                    // Convert to file:// URL for import
+                    const fileUrl = `file://${filePath}`;
+                    command = await import(fileUrl);
+                }
 
-                commandLoadingPromises.push(commandPromise);
+                // Set a new item in the Collection with the key as the command name and the value as the exported module
+                if ('data' in command && 'execute' in command) {
+                    client.commands.set(command.data.name, command);
+                    console.log(`Loaded command handler for: ${command.data.name}`);
+                } else {
+                    console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+                }
             } catch (error) {
                 console.error(`Error loading command at ${filePath}:`, error);
             }
@@ -66,10 +89,7 @@ const loadCommands = async () => {
 const initBot = async () => {
     // First load all commands
     await loadCommands();
-
-    // Wait for all commands to be loaded
-    await Promise.all(commandLoadingPromises);
-    console.log('All commands loaded');
+    console.log(`Commands registered: ${client.commands.size}`);
 
     // When the client is ready, run this code (only once)
     client.once(Events.ClientReady, readyClient => {
