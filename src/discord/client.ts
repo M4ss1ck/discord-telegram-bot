@@ -24,65 +24,127 @@ const client = new ExtendedClient({
     ]
 });
 
-// Promise to track when commands are loaded
-const commandLoadingPromises: Promise<void>[] = [];
-
 // Check if we're in production
 const isProd = process.env.NODE_ENV === 'production';
 
 // Load commands
 const loadCommands = async () => {
-    // Get the base path based on environment
-    const basePath = isProd ? path.join(process.cwd(), 'dist') : __dirname;
-    const foldersPath = path.join(basePath, isProd ? 'discord/commands' : 'commands');
+    try {
+        console.log(`Loading commands in ${isProd ? 'production' : 'development'} mode`);
+        console.log(`Current working directory: ${process.cwd()}`);
+        console.log(`Current file directory: ${__dirname}`);
 
-    // Check if directory exists
-    if (!fs.existsSync(foldersPath)) {
-        console.error(`Commands folder not found: ${foldersPath}`);
-        return;
+        // First try to read command path from the file created by deploy-commands.ts
+        const cmdPathFile = path.join(process.cwd(), 'command-path.txt');
+        if (fs.existsSync(cmdPathFile)) {
+            try {
+                const commandsPath = fs.readFileSync(cmdPathFile, 'utf-8').trim();
+                console.log(`Found command path from file: ${commandsPath}`);
+
+                // Use this exact path
+                if (fs.existsSync(commandsPath)) {
+                    return await loadCommandsFromPath(commandsPath);
+                } else {
+                    console.log(`Command path ${commandsPath} from file does not exist`);
+                }
+            } catch (error) {
+                console.error(`Error reading command path file: ${error}`);
+            }
+        }
+
+        // Try multiple possible paths to find command files
+        const possibleBasePaths = [
+            path.join(process.cwd(), 'dist'),  // For compiled JS in Docker
+            process.cwd(),                      // Root directory
+            __dirname,                          // Current directory
+        ];
+
+        for (const basePath of possibleBasePaths) {
+            console.log(`Trying to load commands from base path: ${basePath}`);
+
+            // Try both command path structures
+            const possibleCommandPaths = [
+                path.join(basePath, 'discord', 'commands'),   // For /dist/discord/commands
+                path.join(basePath, 'src', 'discord', 'commands'), // For /src/discord/commands
+            ];
+
+            for (const commandsPath of possibleCommandPaths) {
+                if (!fs.existsSync(commandsPath)) {
+                    console.log(`Path does not exist: ${commandsPath}`);
+                    continue;
+                }
+
+                if (await loadCommandsFromPath(commandsPath)) {
+                    return true;
+                }
+            }
+        }
+
+        console.error('❌ CRITICAL: Could not find any command files in any location!');
+        return false;
+    } catch (error) {
+        console.error('Error in loadCommands:', error);
+        return false;
     }
+};
 
-    const commandFolders = fs.readdirSync(foldersPath);
+// Helper function to load commands from a specific path
+const loadCommandsFromPath = async (commandsPath: string): Promise<boolean> => {
+    console.log(`Found commands directory: ${commandsPath}`);
+    const commandFolders = fs.readdirSync(commandsPath);
+
+    let commandsLoaded = false;
 
     for (const folder of commandFolders) {
-        const commandsPath = path.join(foldersPath, folder);
-
-        // Skip if not a directory
-        if (!fs.statSync(commandsPath).isDirectory()) {
+        const folderPath = path.join(commandsPath, folder);
+        if (!fs.statSync(folderPath).isDirectory()) {
             continue;
         }
 
-        // Use appropriate file extension based on environment
-        const fileExtension = isProd ? '.js' : '.ts';
-        const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(fileExtension));
+        console.log(`Processing command category: ${folder}`);
 
-        for (const file of commandFiles) {
-            const filePath = path.join(commandsPath, file);
-            try {
-                let command;
+        // Try both file extensions
+        for (const extension of ['.js', '.ts']) {
+            const commandFiles = fs.readdirSync(folderPath).filter(file => file.endsWith(extension));
 
-                if (isProd) {
-                    // For .js files in production, use require
-                    command = require(filePath);
-                } else {
-                    // For .ts files in development, use dynamic import
-                    // Convert to file:// URL for import
-                    const fileUrl = `file://${filePath}`;
-                    command = await import(fileUrl);
+            if (commandFiles.length > 0) {
+                console.log(`Found ${commandFiles.length} ${extension} command files in ${folder}`);
+            }
+
+            for (const file of commandFiles) {
+                const filePath = path.join(folderPath, file);
+                console.log(`Loading command file: ${filePath}`);
+
+                try {
+                    let command;
+
+                    if (extension === '.js') {
+                        command = require(filePath);
+                    } else {
+                        const fileUrl = `file://${filePath}`;
+                        command = await import(fileUrl);
+                    }
+
+                    if ('data' in command && 'execute' in command) {
+                        client.commands.set(command.data.name, command);
+                        console.log(`✅ Successfully registered command handler for: ${command.data.name}`);
+                        commandsLoaded = true;
+                    } else {
+                        console.log(`⚠️ The command at ${filePath} is missing required properties`);
+                    }
+                } catch (error) {
+                    console.error(`❌ Error loading command at ${filePath}:`, error);
                 }
-
-                // Set a new item in the Collection with the key as the command name and the value as the exported module
-                if ('data' in command && 'execute' in command) {
-                    client.commands.set(command.data.name, command);
-                    console.log(`Loaded command handler for: ${command.data.name}`);
-                } else {
-                    console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-                }
-            } catch (error) {
-                console.error(`Error loading command at ${filePath}:`, error);
             }
         }
     }
+
+    if (commandsLoaded) {
+        console.log(`Successfully loaded commands from ${commandsPath}`);
+        return true;
+    }
+
+    return false;
 };
 
 // Initialize bot
@@ -103,6 +165,7 @@ const initBot = async () => {
 
         if (!command) {
             console.error(`No command matching ${interaction.commandName} was found.`);
+            console.log('Available commands:', Array.from(client.commands.keys()));
             return;
         }
 
