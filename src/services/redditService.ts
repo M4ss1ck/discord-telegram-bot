@@ -270,15 +270,18 @@ async function sendPostsToTelegram(posts: Parser.Item[], chatId: string, subredd
 
         for (const post of postsToSend) {
             const message = formatRedditPost(post, subreddit);
-            await TelegramBot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            await TelegramBot.telegram.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
         }
 
         // If there are more than 5 posts, send a notice
         if (posts.length > 5) {
+            // Escape the subreddit name for MarkdownV2
+            const escapedSubreddit = escapeMarkdown(subreddit);
+
             await TelegramBot.telegram.sendMessage(
                 chatId,
-                `_${posts.length - 5} more posts not shown. Visit r/${subreddit} to see all._`,
-                { parse_mode: 'Markdown' }
+                `_${posts.length - 5} more posts not shown\\. Visit r/${escapedSubreddit} to see all\\._`,
+                { parse_mode: 'MarkdownV2' }
             );
         }
     } catch (error) {
@@ -315,6 +318,14 @@ export async function fetchLatestPost(subreddit: string): Promise<Parser.Item | 
 }
 
 /**
+ * Escape text for MarkdownV2 formatting
+ */
+export function escapeMarkdown(text: string): string {
+    // Characters that need escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    return text.replace(/([_*\[\]()~`>#+=|{}.!\\])/g, '\\$1');
+}
+
+/**
  * Format a Reddit post for sending to Telegram
  */
 export function formatRedditPost(post: Parser.Item, subreddit: string): string {
@@ -322,10 +333,17 @@ export function formatRedditPost(post: Parser.Item, subreddit: string): string {
     const link = post.link || '';
     const author = post.creator || 'unknown';
 
-    return `*New post in r/${subreddit}*\n` +
-        `*${title}*\n` +
-        `Posted by u/${author}\n` +
-        `${link}`;
+    // Escape Markdown special characters for MarkdownV2
+    const escapedTitle = escapeMarkdown(title);
+    const escapedSubreddit = escapeMarkdown(subreddit);
+    const escapedAuthor = escapeMarkdown(author);
+    // Links need special handling in MarkdownV2 - we may need to escape parentheses in links
+    const escapedLink = escapeMarkdown(link);
+
+    return `*New post in r/${escapedSubreddit}*\n` +
+        `*${escapedTitle}*\n` +
+        `Posted by u/${escapedAuthor}\n` +
+        `${escapedLink}`;
 }
 
 // Initialize the service

@@ -4,7 +4,8 @@ import {
     unsubscribeFromSubreddit,
     listSubscriptions,
     fetchLatestPost,
-    formatRedditPost
+    formatRedditPost,
+    escapeMarkdown
 } from "../../services/redditService";
 
 const reddit = new Composer();
@@ -36,7 +37,7 @@ reddit.command('sub', async (ctx) => {
 
             if (latestPost) {
                 const message = formatRedditPost(latestPost, normalizedSubreddit);
-                await ctx.reply(message, { parse_mode: 'Markdown' });
+                await ctx.reply(message, { parse_mode: 'MarkdownV2' });
             } else {
                 await ctx.reply(`No recent posts found in r/${normalizedSubreddit}.`);
             }
@@ -90,10 +91,14 @@ reddit.command('subslist', async (ctx) => {
             return;
         }
 
-        // Format the list
-        const formattedList = subscriptions.map(sub => `• r/${sub}`).join('\n');
+        // Format the list with escape for MarkdownV2
+        const formattedList = subscriptions.map(sub => {
+            const escapedSub = escapeMarkdown(sub);
+            return `• r/${escapedSub}`;
+        }).join('\n');
 
-        await ctx.reply(`*Subreddit Subscriptions*\n${formattedList}`, { parse_mode: 'Markdown' });
+        const title = escapeMarkdown("Subreddit Subscriptions");
+        await ctx.reply(`*${title}*\n${formattedList}`, { parse_mode: 'MarkdownV2' });
     } catch (error) {
         console.error('Error listing subscriptions:', error);
         await ctx.reply('❌ There was an error retrieving your subscriptions. Please try again later.');
@@ -119,7 +124,7 @@ reddit.command('latest', async (ctx) => {
 
         if (latestPost) {
             const message = formatRedditPost(latestPost, normalizedSubreddit);
-            await ctx.reply(message, { parse_mode: 'Markdown' });
+            await ctx.reply(message, { parse_mode: 'MarkdownV2' });
         } else {
             await ctx.reply(`No recent posts found in r/${normalizedSubreddit}.`);
         }
