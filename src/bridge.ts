@@ -74,21 +74,22 @@ DiscordClient.on('messageCreate', async (message: Message) => {
     const telegramChatIds = getMappingsForDiscordChannel(channelId);
 
     if (telegramChatIds.length > 0) {
-        // Format the message
-        let formattedMessage = `**${message.author.username}**`;
+        // Format the message for Telegram using HTML parse mode
+        let formattedMessage = '';
 
         // Check if we have access to message content
         if (message.content) {
-            formattedMessage += `: ${message.content}`;
+            formattedMessage = `<b>${message.author.username}</b>: ${message.content}`;
         } else {
-            formattedMessage += ` sent a message`;
+            formattedMessage = `<b>${message.author.username}</b>:`;
             console.log('Note: No access to message content. Enable MESSAGE CONTENT INTENT in Discord Developer Portal for full functionality.');
         }
 
         // Forward the message to all mapped Telegram chats
         for (const chatId of telegramChatIds) {
             try {
-                await TelegramBot.telegram.sendMessage(chatId, formattedMessage);
+                // Use HTML parse mode to properly render bold text
+                await TelegramBot.telegram.sendMessage(chatId, formattedMessage, { parse_mode: 'HTML' });
 
                 // If there are attachments, send them too
                 if (message.attachments.size > 0) {
