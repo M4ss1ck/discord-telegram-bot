@@ -2,6 +2,13 @@ import Parser from 'rss-parser';
 import TelegramBot from '../telegram/bot';
 import { createClient } from 'redis';
 
+// Extend Parser.Item to include the id property used in Reddit feeds
+declare module 'rss-parser' {
+    interface Item {
+        id?: string;
+    }
+}
+
 // Interfaces
 interface Subscription {
     subreddit: string;
@@ -218,6 +225,7 @@ async function checkForNewPosts(subreddit: string): Promise<void> {
         const feed = await parser.parseURL(`https://www.reddit.com/r/${subreddit}/new/.rss`);
 
         if (!feed.items || feed.items.length === 0) {
+            console.log(`No items found in the feed for r/${subreddit}`);
             return;
         }
 
@@ -226,26 +234,63 @@ async function checkForNewPosts(subreddit: string): Promise<void> {
             return new Date(b.pubDate || '').getTime() - new Date(a.pubDate || '').getTime();
         });
 
+        // Debug first item for troubleshooting
+        if (sortedItems.length > 0) {
+            const firstItem = sortedItems[0];
+            console.log(`Latest post from r/${subreddit}: ${firstItem.title} (ID: ${firstItem.id}) published at ${firstItem.pubDate}`);
+        }
+
         // Process each subscription
         let needsSave = false;
 
         for (const sub of subs) {
-            // Find new posts since last check
-            const newPosts = sortedItems.filter(item => {
-                const itemDate = new Date(item.pubDate || '');
-                return itemDate > sub.lastChecked && item.id !== sub.lastPostId;
-            });
+            // Log the current state
+            console.log(`r/${subreddit} subscription state: lastChecked=${sub.lastChecked.toISOString()}, lastPostId=${sub.lastPostId || 'none'}`);
+
+            // Find new posts
+            // We'll modify this to be more robust - first try with ID check, then fallback to date if needed
+            let newPosts: Parser.Item[] = [];
+
+            // If we have a last post ID, use that for comparison first
+            if (sub.lastPostId) {
+                // Get all posts until we hit the last seen post ID
+                const postIds = new Set(sortedItems.map(item => item.id));
+                // If the last post ID is not found at all, consider all posts as new (might have been deleted)
+                if (!postIds.has(sub.lastPostId)) {
+                    console.log(`Last post ID ${sub.lastPostId} no longer found in feed. Considering posts as new.`);
+                    newPosts = sortedItems;
+                } else {
+                    // Get posts until we hit the last seen post
+                    for (const item of sortedItems) {
+                        if (item.id === sub.lastPostId) break;
+                        newPosts.push(item);
+                    }
+                }
+            } else {
+                // No last post ID, use date comparison as fallback
+                newPosts = sortedItems.filter(item => {
+                    const itemDate = new Date(item.pubDate || '');
+                    return itemDate > sub.lastChecked;
+                });
+            }
 
             // Send new posts to the Telegram chat
             if (newPosts.length > 0) {
+                console.log(`Found ${newPosts.length} new posts for r/${subreddit}`);
                 await sendPostsToTelegram(newPosts, sub.chatId, subreddit);
 
                 // Update subscription with latest post information
                 sub.lastChecked = new Date();
                 if (newPosts[0].id) {
                     sub.lastPostId = newPosts[0].id;
+                    console.log(`Updated lastPostId to ${newPosts[0].id}`);
                 }
 
+                needsSave = true;
+            } else {
+                console.log(`No new posts found for r/${subreddit}`);
+                // Update the lastChecked time even if no new posts
+                sub.lastChecked = new Date();
                 needsSave = true;
             }
         }
