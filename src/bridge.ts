@@ -134,11 +134,15 @@ DiscordClient.on('messageCreate', async (message: Message) => {
         // Format the message for Telegram using HTML parse mode
         let formattedMessage = '';
 
+        // Get the display name (nickname) instead of username
+        const displayName = message.member?.displayName || message.author.username;
+
         // Check if we have access to message content
         if (message.content) {
-            formattedMessage = `<b>${message.author.username}</b>: ${message.content}`;
+            formattedMessage = `<b>${displayName}</b>: ${message.content}`;
         } else {
-            formattedMessage = `<b>${message.author.username}</b>:`;
+            formattedMessage = `<b>${displayName}</b> sent a message`;
+            console.log('Note: No access to message content. Enable MESSAGE CONTENT INTENT in Discord Developer Portal for full functionality.');
         }
 
         // Forward the message to all mapped Telegram chats
