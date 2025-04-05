@@ -82,7 +82,7 @@ const loadCommands = async () => {
 };
 
 // Main function to deploy commands
-const deployCommands = async () => {
+export const deployCommands = async () => {
     try {
         // First load all commands
         await loadCommands();
@@ -111,16 +111,18 @@ const deployCommands = async () => {
     }
 };
 
-// Run the deployment and explicitly exit after completion
-deployCommands().then(success => {
-    if (success) {
-        console.log('Command deployment completed successfully.');
-    } else {
-        console.error('Command deployment completed with errors.');
-        process.exitCode = 1;
-    }
-    // Force exit after a short delay to ensure all logs are flushed
-    setTimeout(() => {
-        process.exit();
-    }, 100);
-});
+// Only run the deployment directly if this file is being executed directly (not imported)
+if (require.main === module) {
+    deployCommands().then(success => {
+        if (success) {
+            console.log('Command deployment completed successfully.');
+        } else {
+            console.error('Command deployment completed with errors.');
+            process.exitCode = 1;
+        }
+        // Force exit after a short delay to ensure all logs are flushed
+        setTimeout(() => {
+            process.exit();
+        }, 100);
+    });
+}
