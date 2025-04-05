@@ -2,6 +2,7 @@ import TelegramBot from './telegram/bot';
 import DiscordClient from './discord/client';
 import './bridge'; // Import the bridge module we'll create
 import { deployCommands } from './deploy-commands';
+import { initRedditService } from './services/redditService';
 
 // Deploy Discord commands first, then start the bots
 async function init() {
@@ -24,6 +25,10 @@ async function init() {
 
         // Discord client is initialized in the client.ts file
         console.log('Discord bot started');
+
+        // Initialize Reddit subscription service
+        await initRedditService();
+        console.log('Reddit subscription service started');
     } catch (error) {
         console.error('Error during initialization:', error);
     }
