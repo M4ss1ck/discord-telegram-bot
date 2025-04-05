@@ -12,34 +12,71 @@ const commands: any[] = [];
 
 // Function to load all commands
 const loadCommands = async () => {
-    // Grab all the command folders from the commands directory you created earlier
-    const foldersPath = path.join(__dirname, 'discord/commands');
-    const commandFolders = fs.readdirSync(foldersPath);
+    // Get the base path - could be either src/ or dist/ depending on environment
+    // We'll search in both possible locations
+    const possibleBasePaths = [
+        path.join(process.cwd(), 'dist'), // For production (compiled JS)
+        process.cwd(),                    // For direct node execution with ts-node
+        __dirname                         // For development
+    ];
 
-    for (const folder of commandFolders) {
-        // Grab all the command files from the commands directory you created earlier
-        const commandsPath = path.join(foldersPath, folder);
-        // Look for .ts files instead of .js files
-        const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.ts'));
+    // Try each possible base path until we find command files
+    for (const basePath of possibleBasePaths) {
+        const foldersPath = path.join(basePath, 'discord/commands');
 
-        // Process each command file
-        for (const file of commandFiles) {
-            const filePath = path.join(commandsPath, file);
+        // Skip if the directory doesn't exist
+        if (!fs.existsSync(foldersPath)) {
+            continue;
+        }
 
-            try {
-                // Convert to file:// URL for import
-                const fileUrl = `file://${filePath}`;
-                const command = await import(fileUrl);
+        const commandFolders = fs.readdirSync(foldersPath);
 
-                if ('data' in command && 'execute' in command) {
-                    commands.push(command.data.toJSON());
-                    console.log(`Loaded command: ${command.data.name}`);
-                } else {
-                    console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-                }
-            } catch (error) {
-                console.error(`Error importing command at ${filePath}:`, error);
+        for (const folder of commandFolders) {
+            const commandsPath = path.join(foldersPath, folder);
+
+            // Skip if not a directory
+            if (!fs.statSync(commandsPath).isDirectory()) {
+                continue;
             }
+
+            // Look for both .js and .ts files
+            const commandFiles = fs.readdirSync(commandsPath).filter(file =>
+                file.endsWith('.js') || file.endsWith('.ts')
+            );
+
+            // Process each command file
+            for (const file of commandFiles) {
+                const filePath = path.join(commandsPath, file);
+                const fileExtension = path.extname(file);
+
+                try {
+                    let command;
+
+                    if (fileExtension === '.js') {
+                        // For .js files, use require
+                        command = require(filePath);
+                    } else {
+                        // For .ts files, use dynamic import
+                        const fileUrl = `file://${filePath}`;
+                        command = await import(fileUrl);
+                    }
+
+                    if ('data' in command && 'execute' in command) {
+                        commands.push(command.data.toJSON());
+                        console.log(`Loaded command: ${command.data.name}`);
+                    } else {
+                        console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+                    }
+                } catch (error) {
+                    console.error(`Error importing command at ${filePath}:`, error);
+                }
+            }
+        }
+
+        // If we found and loaded commands from this path, no need to check other paths
+        if (commands.length > 0) {
+            console.log(`Found and loaded ${commands.length} commands from ${basePath}`);
+            break;
         }
     }
 };
@@ -49,6 +86,11 @@ const deployCommands = async () => {
     try {
         // First load all commands
         await loadCommands();
+
+        if (commands.length === 0) {
+            console.error('No commands found! Deployment aborted.');
+            return false;
+        }
 
         console.log(`Started refreshing ${commands.length} application (/) commands.`);
 
