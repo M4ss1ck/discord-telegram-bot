@@ -16,7 +16,8 @@ start.help((ctx) => ctx.reply(
     '-- Reddit commands --\n' +
     '/sub <subreddit> - Subscribe to receive new posts from a subreddit\n' +
     '/unsub <subreddit> - Unsubscribe from a subreddit\n' +
-    '/subslist - Show all subreddit subscriptions for this chat'
+    '/subslist - Show all subreddit subscriptions for this chat\n' +
+    '/latest <subreddit> - Get the latest post from a subreddit without subscribing'
 ));
 
 export default start;

@@ -269,15 +269,7 @@ async function sendPostsToTelegram(posts: Parser.Item[], chatId: string, subredd
         const postsToSend = posts.slice(0, 5);
 
         for (const post of postsToSend) {
-            const title = post.title || 'No title';
-            const link = post.link || '';
-            const author = post.creator || 'unknown';
-
-            const message = `*New post in r/${subreddit}*\n` +
-                `*${title}*\n` +
-                `Posted by u/${author}\n` +
-                `${link}`;
-
+            const message = formatRedditPost(post, subreddit);
             await TelegramBot.telegram.sendMessage(chatId, message, { parse_mode: 'Markdown' });
         }
 
@@ -292,6 +284,48 @@ async function sendPostsToTelegram(posts: Parser.Item[], chatId: string, subredd
     } catch (error) {
         console.error(`Error sending posts to Telegram chat ${chatId}:`, error);
     }
+}
+
+/**
+ * Fetch the latest post from a subreddit
+ */
+export async function fetchLatestPost(subreddit: string): Promise<Parser.Item | null> {
+    try {
+        // Normalize subreddit name
+        const normalizedSubreddit = subreddit.toLowerCase().replace(/^r\//, '');
+
+        // Fetch the RSS feed
+        const feed = await parser.parseURL(`https://www.reddit.com/r/${normalizedSubreddit}/new/.rss`);
+
+        if (!feed.items || feed.items.length === 0) {
+            return null;
+        }
+
+        // Sort items by date (newest first)
+        const sortedItems = feed.items.sort((a, b) => {
+            return new Date(b.pubDate || '').getTime() - new Date(a.pubDate || '').getTime();
+        });
+
+        // Return the most recent post
+        return sortedItems[0];
+    } catch (error) {
+        console.error(`Error fetching latest post from r/${subreddit}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Format a Reddit post for sending to Telegram
+ */
+export function formatRedditPost(post: Parser.Item, subreddit: string): string {
+    const title = post.title || 'No title';
+    const link = post.link || '';
+    const author = post.creator || 'unknown';
+
+    return `*New post in r/${subreddit}*\n` +
+        `*${title}*\n` +
+        `Posted by u/${author}\n` +
+        `${link}`;
 }
 
 // Initialize the service
