@@ -25,6 +25,8 @@ const redisClient = createClient({
 
 // Redis keys
 const REDDIT_SUBSCRIPTIONS_KEY = 'reddit_subscriptions';
+const REDDIT_POLLING_STATE_KEY = 'reddit_polling_state';
+const REDDIT_POLLING_QUEUE_KEY = 'reddit_polling_queue';
 
 // Redis connection handling
 redisClient.on('error', (err) => console.error('Reddit Service Redis Error:', err));
@@ -41,11 +43,28 @@ redisClient.on('connect', () => console.log('Reddit Service connected to Redis')
 
 const parser = new Parser();
 
-// Poll interval in milliseconds (5 minutes)
-const POLL_INTERVAL = 5 * 60 * 1000;
+// Polling configuration
+const POLLING_CONFIG = {
+    baseInterval: 5 * 60 * 1000, // 5 minutes
+    maxInterval: 30 * 60 * 1000, // 30 minutes
+    backoffFactor: 2,
+    maxRetries: 5
+};
 
-// Active polling intervals
-const activePolling = new Set<string>();
+interface PollingState {
+    lastPolled: Date;
+    nextPoll: Date;
+    retryCount: number;
+    errorCount: number;
+}
+
+// Declare global variable for polling loop state
+declare global {
+    var pollingLoopRunning: boolean;
+}
+
+// Initialize global variable
+global.pollingLoopRunning = false;
 
 /**
  * Get all subscriptions from Redis
@@ -153,10 +172,10 @@ export async function unsubscribeFromSubreddit(subreddit: string, chatId: string
         subscriptions.delete(normalizedSubreddit);
 
         // If there are no more subscriptions for this subreddit, we can stop polling
-        if (activePolling.has(normalizedSubreddit)) {
+        if (global.pollingLoopRunning) {
             // Note: we can't actually stop the interval, but we'll just let it run
             // and it will exit early when it checks that there are no subscriptions
-            activePolling.delete(normalizedSubreddit);
+            global.pollingLoopRunning = false;
         }
     } else {
         subscriptions.set(normalizedSubreddit, newSubs);
@@ -190,33 +209,95 @@ export async function listSubscriptions(chatId: string): Promise<string[]> {
 /**
  * Start polling for new posts
  */
-function startPolling(subreddit: string): void {
+async function startPolling(subreddit: string): Promise<void> {
     console.log(`Starting to poll r/${subreddit}`);
 
-    // Mark as active polling
-    activePolling.add(subreddit);
+    // Initialize polling state in Redis
+    const initialState: PollingState = {
+        lastPolled: new Date(),
+        nextPoll: new Date(Date.now() + POLLING_CONFIG.baseInterval),
+        retryCount: 0,
+        errorCount: 0
+    };
 
-    // Immediately check once
-    checkForNewPosts(subreddit);
+    await redisClient.hSet(REDDIT_POLLING_STATE_KEY, subreddit, JSON.stringify(initialState));
 
-    // Set interval for regular checks
-    setInterval(async () => {
-        // Only continue if this subreddit is still being polled
-        if (activePolling.has(subreddit)) {
-            await checkForNewPosts(subreddit);
-        }
-    }, POLL_INTERVAL);
+    // Add to polling queue
+    await redisClient.zAdd(REDDIT_POLLING_QUEUE_KEY, {
+        score: Date.now(),
+        value: subreddit
+    });
+
+    // Start the polling loop if not already running
+    if (!global.pollingLoopRunning) {
+        startPollingLoop();
+    }
 }
 
 /**
- * Check for new posts in a subreddit
+ * Start the main polling loop
  */
-async function checkForNewPosts(subreddit: string): Promise<void> {
-    // Get current subscriptions
+function startPollingLoop(): void {
+    if (global.pollingLoopRunning) return;
+
+    global.pollingLoopRunning = true;
+    console.log('Starting Reddit polling loop');
+
+    const pollLoop = async () => {
+        try {
+            // Get all subreddits due for polling
+            const now = Date.now();
+            const dueSubreddits = await redisClient.zRangeByScore(
+                REDDIT_POLLING_QUEUE_KEY,
+                0,
+                now
+            );
+
+            if (dueSubreddits.length > 0) {
+                // Process each subreddit
+                for (const subreddit of dueSubreddits) {
+                    try {
+                        await processSubredditPoll(subreddit);
+                    } catch (error) {
+                        console.error(`Error processing subreddit ${subreddit}:`, error);
+                        await handlePollingError(subreddit, error);
+                    }
+                }
+            }
+
+            // Schedule next check
+            setTimeout(pollLoop, 1000); // Check every second
+        } catch (error) {
+            console.error('Error in polling loop:', error);
+            setTimeout(pollLoop, 5000); // Wait 5 seconds on error
+        }
+    };
+
+    pollLoop();
+}
+
+/**
+ * Process a single subreddit poll
+ */
+async function processSubredditPoll(subreddit: string): Promise<void> {
+    // Get current state
+    const stateStr = await redisClient.hGet(REDDIT_POLLING_STATE_KEY, subreddit);
+    if (!stateStr) return;
+
+    const state: PollingState = JSON.parse(stateStr);
+
+    // Check if it's time to poll
+    if (new Date(state.nextPoll) > new Date()) {
+        return;
+    }
+
+    // Get subscriptions
     const subscriptions = await getAllSubscriptions();
     const subs = subscriptions.get(subreddit);
-
     if (!subs || subs.length === 0) {
+        // No subscriptions, remove from polling
+        await redisClient.hDel(REDDIT_POLLING_STATE_KEY, subreddit);
+        await redisClient.zRem(REDDIT_POLLING_QUEUE_KEY, subreddit);
         return;
     }
 
@@ -226,82 +307,97 @@ async function checkForNewPosts(subreddit: string): Promise<void> {
 
         if (!feed.items || feed.items.length === 0) {
             console.log(`No items found in the feed for r/${subreddit}`);
+            await updatePollingState(subreddit, true);
             return;
         }
 
-        // Sort items by date (newest first)
+        // Process new posts
         const sortedItems = feed.items.sort((a, b) => {
             return new Date(b.pubDate || '').getTime() - new Date(a.pubDate || '').getTime();
         });
 
-        // Debug first item for troubleshooting
-        if (sortedItems.length > 0) {
-            const firstItem = sortedItems[0];
-            console.log(`Latest post from r/${subreddit}: ${firstItem.title} (ID: ${firstItem.id}) published at ${firstItem.pubDate}`);
-        }
-
-        // Process each subscription
         let needsSave = false;
-
         for (const sub of subs) {
-            // Log the current state
-            console.log(`r/${subreddit} subscription state: lastChecked=${sub.lastChecked.toISOString()}, lastPostId=${sub.lastPostId || 'none'}`);
-
-            // Find new posts
-            // We'll modify this to be more robust - first try with ID check, then fallback to date if needed
-            let newPosts: Parser.Item[] = [];
-
-            // If we have a last post ID, use that for comparison first
-            if (sub.lastPostId) {
-                // Get all posts until we hit the last seen post ID
-                const postIds = new Set(sortedItems.map(item => item.id));
-                // If the last post ID is not found at all, consider all posts as new (might have been deleted)
-                if (!postIds.has(sub.lastPostId)) {
-                    console.log(`Last post ID ${sub.lastPostId} no longer found in feed. Considering posts as new.`);
-                    newPosts = sortedItems;
-                } else {
-                    // Get posts until we hit the last seen post
-                    for (const item of sortedItems) {
-                        if (item.id === sub.lastPostId) break;
-                        newPosts.push(item);
-                    }
-                }
-            } else {
-                // No last post ID, use date comparison as fallback
-                newPosts = sortedItems.filter(item => {
-                    const itemDate = new Date(item.pubDate || '');
-                    return itemDate > sub.lastChecked;
-                });
-            }
-
-            // Send new posts to the Telegram chat
+            const newPosts = findNewPosts(sortedItems, sub);
             if (newPosts.length > 0) {
-                console.log(`Found ${newPosts.length} new posts for r/${subreddit}`);
                 await sendPostsToTelegram(newPosts, sub.chatId, subreddit);
-
-                // Update subscription with latest post information
                 sub.lastChecked = new Date();
                 if (newPosts[0].id) {
                     sub.lastPostId = newPosts[0].id;
-                    console.log(`Updated lastPostId to ${newPosts[0].id}`);
                 }
-
-                needsSave = true;
-            } else {
-                console.log(`No new posts found for r/${subreddit}`);
-                // Update the lastChecked time even if no new posts
-                sub.lastChecked = new Date();
                 needsSave = true;
             }
         }
 
-        // Save updated subscriptions to Redis if needed
         if (needsSave) {
             subscriptions.set(subreddit, subs);
             await saveAllSubscriptions(subscriptions);
         }
+
+        // Update polling state on success
+        await updatePollingState(subreddit, true);
     } catch (error) {
-        console.error(`Error checking for new posts in r/${subreddit}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Update polling state after a poll attempt
+ */
+async function updatePollingState(subreddit: string, success: boolean): Promise<void> {
+    const stateStr = await redisClient.hGet(REDDIT_POLLING_STATE_KEY, subreddit);
+    if (!stateStr) return;
+
+    const state: PollingState = JSON.parse(stateStr);
+    const now = new Date();
+
+    if (success) {
+        // Reset error count and retry count on success
+        state.errorCount = 0;
+        state.retryCount = 0;
+        state.lastPolled = now;
+        state.nextPoll = new Date(now.getTime() + POLLING_CONFIG.baseInterval);
+    } else {
+        // Increment error count
+        state.errorCount++;
+        state.retryCount++;
+
+        // Calculate next poll time with exponential backoff
+        const backoffTime = Math.min(
+            POLLING_CONFIG.baseInterval * Math.pow(POLLING_CONFIG.backoffFactor, state.retryCount),
+            POLLING_CONFIG.maxInterval
+        );
+        state.nextPoll = new Date(now.getTime() + backoffTime);
+    }
+
+    // Save updated state
+    await redisClient.hSet(REDDIT_POLLING_STATE_KEY, subreddit, JSON.stringify(state));
+
+    // Update queue with new next poll time
+    await redisClient.zAdd(REDDIT_POLLING_QUEUE_KEY, {
+        score: state.nextPoll.getTime(),
+        value: subreddit
+    });
+}
+
+/**
+ * Handle polling errors
+ */
+async function handlePollingError(subreddit: string, error: any): Promise<void> {
+    console.error(`Error polling r/${subreddit}:`, error);
+
+    // Update state with error
+    await updatePollingState(subreddit, false);
+
+    // If too many errors, remove from polling
+    const stateStr = await redisClient.hGet(REDDIT_POLLING_STATE_KEY, subreddit);
+    if (stateStr) {
+        const state: PollingState = JSON.parse(stateStr);
+        if (state.errorCount >= POLLING_CONFIG.maxRetries) {
+            console.log(`Removing r/${subreddit} from polling due to too many errors`);
+            await redisClient.hDel(REDDIT_POLLING_STATE_KEY, subreddit);
+            await redisClient.zRem(REDDIT_POLLING_QUEUE_KEY, subreddit);
+        }
     }
 }
 
@@ -391,7 +487,41 @@ export function formatRedditPost(post: Parser.Item, subreddit: string): string {
         `${escapedLink}`;
 }
 
-// Initialize the service
+/**
+ * Find new posts for a subscription
+ */
+function findNewPosts(sortedItems: Parser.Item[], sub: Subscription): Parser.Item[] {
+    let newPosts: Parser.Item[] = [];
+
+    // If we have a last post ID, use that for comparison first
+    if (sub.lastPostId) {
+        // Get all posts until we hit the last seen post ID
+        const postIds = new Set(sortedItems.map(item => item.id));
+        // If the last post ID is not found at all, consider all posts as new (might have been deleted)
+        if (!postIds.has(sub.lastPostId)) {
+            console.log(`Last post ID ${sub.lastPostId} no longer found in feed. Considering posts as new.`);
+            newPosts = sortedItems;
+        } else {
+            // Get posts until we hit the last seen post
+            for (const item of sortedItems) {
+                if (item.id === sub.lastPostId) break;
+                newPosts.push(item);
+            }
+        }
+    } else {
+        // No last post ID, use date comparison as fallback
+        newPosts = sortedItems.filter(item => {
+            const itemDate = new Date(item.pubDate || '');
+            return itemDate > sub.lastChecked;
+        });
+    }
+
+    return newPosts;
+}
+
+/**
+ * Initialize the service
+ */
 export async function initRedditService(): Promise<void> {
     console.log('Reddit subscription service initializing...');
 
@@ -404,11 +534,30 @@ export async function initRedditService(): Promise<void> {
         // Get all subscriptions
         const subscriptions = await getAllSubscriptions();
 
-        // Start polling for each subreddit that has subscriptions
+        // Initialize polling state for existing subscriptions
         for (const [subreddit, subs] of subscriptions.entries()) {
             if (subs.length > 0) {
-                startPolling(subreddit);
+                // Initialize polling state if it doesn't exist
+                const stateStr = await redisClient.hGet(REDDIT_POLLING_STATE_KEY, subreddit);
+                if (!stateStr) {
+                    const initialState: PollingState = {
+                        lastPolled: new Date(),
+                        nextPoll: new Date(Date.now() + POLLING_CONFIG.baseInterval),
+                        retryCount: 0,
+                        errorCount: 0
+                    };
+                    await redisClient.hSet(REDDIT_POLLING_STATE_KEY, subreddit, JSON.stringify(initialState));
+                    await redisClient.zAdd(REDDIT_POLLING_QUEUE_KEY, {
+                        score: Date.now(),
+                        value: subreddit
+                    });
+                }
             }
+        }
+
+        // Start the polling loop
+        if (!global.pollingLoopRunning) {
+            startPollingLoop();
         }
 
         console.log(`Reddit subscription service initialized with ${subscriptions.size} subreddits being monitored`);
