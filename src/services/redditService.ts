@@ -45,7 +45,7 @@ const parser = new Parser();
 
 // Polling configuration
 const POLLING_CONFIG = {
-    baseInterval: 5 * 60 * 1000, // 5 minutes
+    baseInterval: 3 * 60 * 1000, // 3 minutes
     maxInterval: 30 * 60 * 1000, // 30 minutes
     backoffFactor: 2,
     maxRetries: 5
