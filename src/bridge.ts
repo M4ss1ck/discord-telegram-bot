@@ -1,6 +1,4 @@
-import { Message, TextChannel } from 'discord.js';
-import { Context } from 'telegraf';
-import { Message as TelegramMessage } from 'telegraf/typings/core/types/typegram';
+import { Message } from 'discord.js';
 import DiscordClient from './discord/client';
 import TelegramBot from './telegram/bot';
 import { createClient } from 'redis';
@@ -121,14 +119,21 @@ export async function getAllMappings(): Promise<ChannelMapping[]> {
 
 // Handle Discord messages and forward them to Telegram
 DiscordClient.on('messageCreate', async (message: Message) => {
-    // Don't process messages from bots (including our own)
-    if (message.author.bot) return;
+    console.log(`Received message in Discord channel ${message.channelId}`);
+
+    // Only skip messages from our own bot to prevent loops
+    if (message.author.id === DiscordClient.user?.id) {
+        console.log('Message from our own bot, skipping to prevent loops');
+        return;
+    }
 
     // Get the channel ID
     const channelId = message.channelId;
+    console.log(`Processing message for channel ${channelId}`);
 
     // Find all Telegram chats this Discord channel is mapped to
     const telegramChatIds = await getMappingsForDiscordChannel(channelId);
+    console.log(`Found ${telegramChatIds.length} Telegram chat mappings for Discord channel ${channelId}`);
 
     if (telegramChatIds.length > 0) {
         // Format the message for Telegram using HTML parse mode
@@ -136,13 +141,15 @@ DiscordClient.on('messageCreate', async (message: Message) => {
 
         // Get the display name (nickname) instead of username
         const displayName = message.member?.displayName || message.author.username;
+        console.log(`Message from user: ${displayName}`);
 
         // Check if we have access to message content
         if (message.content) {
             formattedMessage = `<b>${displayName}</b>: ${message.content}`;
+            console.log('Message content available');
         } else {
             formattedMessage = `<b>${displayName}</b> sent a message`;
-            console.log('Note: No access to message content. Enable MESSAGE CONTENT INTENT in Discord Developer Portal for full functionality.');
+            console.log('Warning: No access to message content. Enable MESSAGE CONTENT INTENT in Discord Developer Portal');
         }
 
         // Forward the message to all mapped Telegram chats
