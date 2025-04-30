@@ -15,7 +15,7 @@ This project is a one-way bridge from Discord to Telegram, forwarding messages f
 1. Clone the repository:
 
    ```
-   git clone https://github.com/yourusername/discord-telegram-bot.git
+   git clone https://github.com/M4ss1ck/discord-telegram-bot.git
    ```
 
 2. Navigate to the project directory:
